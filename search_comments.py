@@ -1,65 +1,45 @@
-from docx import Document
+import zipfile
 import lxml.etree as ET
 
 word_docx_path = ""
 search_term = ""
 
 def search_comments_in_docx(doc_path, search_term):
-    # Load the Word document
-    doc = Document(doc_path)
-
-    # Find the comments part by searching for the appropriate relationship type
-    comments_part = None
-    for rel in doc.part.rels.values():
-        if "comments" in rel.target_ref:
-            comments_part = rel.target_part
-            break
-    
-    if not comments_part:
-        print("No comments found in the document.")
-        return
-    
-    # Parse the comments XML
-    comments_xml = comments_part.blob
-    root = ET.fromstring(comments_xml)
-    
-    # Initialize a list to store comments containing the search term
-    matching_comments = []
-    
-    # Define the namespace (handled differently without using xpath)
-    ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
-    
-    # Find all comments
-    for comment in root.findall('.//w:comment', ns):
-        # Extract the comment text
-        comment_text = "".join(t.text for t in comment.findall('.//w:t', ns)).strip()
+    # Open the .docx file as a zip
+    with zipfile.ZipFile(doc_path, 'r') as docx_zip:
+        # Read the main document XML and the comments XML
+        document_xml = docx_zip.read('word/document.xml')
+        comments_xml = docx_zip.read('word/comments.xml')
         
-        # Extract the text being commented on using the comment id
-        comment_id = comment.get(f'{{{ns["w"]}}}id')
-        comment_ref = doc.element.findall(f'.//w:commentRangeStart[@w:id="{comment_id}"]', namespaces=ns)
+        # Parse the XML content
+        doc_root = ET.fromstring(document_xml)
+        comments_root = ET.fromstring(comments_xml)
         
-        if comment_ref:
+        # Namespace
+        ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+        
+        # Create a dictionary to store comments by their ID
+        comments_dict = {}
+        for comment in comments_root.findall('.//w:comment', ns):
+            comment_id = comment.get(f'{{{ns["w"]}}}id')
+            comment_text = "".join(t.text for t in comment.findall('.//w:t', ns)).strip()
+            comments_dict[comment_id] = comment_text
+        
+        # Find all the commented texts in the document
+        for comment_start in doc_root.findall('.//w:commentRangeStart', ns):
+            comment_id = comment_start.get(f'{{{ns["w"]}}}id')
             commented_text = ""
-            next_element = comment_ref[0].getnext()
-            while next_element is not None:
-                if next_element.tag.endswith('commentRangeEnd'):
-                    break
+            
+            # Navigate through the document to find the text associated with this comment
+            next_element = comment_start.getnext()
+            while next_element is not None and not next_element.tag.endswith('commentRangeEnd'):
                 if next_element.tag.endswith('r'):
                     commented_text += "".join(t.text for t in next_element.findall('.//w:t', ns) if t.text)
                 next_element = next_element.getnext()
-        
-        if search_term.lower() in comment_text.lower():
-            matching_comments.append((commented_text, comment_text))
-    
-    # Print or return the list of matching comments
-    if matching_comments:
-        print(f"Comments containing \"{search_term}\":\n")
-        for commented_text, comment_text in matching_comments:
-            print(f"\"{commented_text}\": \"{comment_text}\"")
-    else:
-        print(f"No comments found containing the term '{search_term}'.")
-    
-    # Keep the terminal open
-    input("\nPress Enter to close...")
+            
+            # Check if the comment text contains the search term
+            if comment_id in comments_dict and search_term.lower() in comments_dict[comment_id].lower():
+                print(f"\"{commented_text}\": \"{comments_dict[comment_id]}\"")
+
 
 search_comments_in_docx(word_docx_path, search_term)
